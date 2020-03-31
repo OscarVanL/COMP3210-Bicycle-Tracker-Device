@@ -32,7 +32,7 @@
 #define FONA_KEY 3
 
 // MQTT
-#define MQTT_TOPIC = "/bike-tracker"
+#define MQTT_TOPIC = "/biketracker"
 
 SoftwareSerial fonaSS = SoftwareSerial(FONA_TX, FONA_RX);
 SoftwareSerial *fonaSerial = &fonaSS;
