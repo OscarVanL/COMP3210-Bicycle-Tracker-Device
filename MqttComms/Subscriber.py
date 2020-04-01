@@ -1,6 +1,7 @@
 import paho.mqtt.client
 import sys
 import yaml
+import uuid
 
 
 def on_connect(client, userdata, flags, rc):
@@ -21,12 +22,13 @@ def main():
         config = yaml.load(configuration, Loader=yaml.FullLoader)
         print(config)
 
-    # Start MQTT subscription listening for data from the tracker
-    client = paho.mqtt.client.Client(client_id=None, clean_session=False)
+    # Start MQTT subscription listening for data from the tracker.
+    client = paho.mqtt.client.Client(client_id=str(uuid.getnode()), clean_session=False)
     client.username_pw_set(config['MQTT_USER'], config['MQTT_PASS'])
     client.on_connect = on_connect
     client.on_message = on_message
     client.connect(host=config['MQTT_BROKER'], port=config['MQTT_PORT'])
+    client.subscribe(topic="test/#")
     client.loop_forever()
 
 

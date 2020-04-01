@@ -1,0 +1,11 @@
+syntax = "proto2";
+
+message GpsPayload {
+	required float latitude = 1;
+	required float longitude = 2;
+	required int64 epoch = 3;
+	required int32 battery = 4;
+	optional float speed_kph = 5;
+	optional float heading = 6;
+	optional float altitude = 7;
+}
