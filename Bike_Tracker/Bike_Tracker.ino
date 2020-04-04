@@ -24,6 +24,7 @@
 #include "pb_common.h"
 #include "pb.h"
 #include "pb_encode.h"
+#include <TimeLib.h>
 #include <SoftwareSerial.h>
 
 // FONA Pins
@@ -53,7 +54,7 @@ Adafruit_MQTT_Subscribe sleep_sub = Adafruit_MQTT_Subscribe(&mqtt, "biketracker/
 Adafruit_MQTT_Subscribe reboot_sub = Adafruit_MQTT_Subscribe(&mqtt, "biketracker/reboot");
 
 // How long to sleep device between payloads in milliseconds
-long sleep_duration = 60000
+long sleep_duration = 60000;
 
 
 void setup() {
@@ -71,7 +72,7 @@ void setup() {
   pinMode(FONA_PS, INPUT);
 
   // Power up FONA if it's off
-  FONA_power_on()
+  FONA_power_on();
 
   Watchdog.reset();
   
@@ -149,8 +150,14 @@ void loop() {
 
     if (attempt < failed_gps_retries) {
       Watchdog.reset();
-      boolean gps_success = fona.getGPS(&latitude, &longitude, &speed_kph, &heading, &altitude)
+      boolean gps_success = fona.getGPS(&latitude, &longitude, &speed_kph, &heading, &altitude);
       if (gps_success) {
+        // FONA Library's readRTC function has been replaced with the unmerged one from https://github.com/adafruit/Adafruit_FONA/pull/76
+        uint8_t year, month, day, hr, mins, sec, tz;
+        fona.readRTC(&year, &month, &day, &hr, &mins, &sec, &tz);
+        // Convert time to epoch for more efficient transmission
+        setTime(hr, mins, sec, day, month, year);
+        
         Serial.print(F("GPS lat:"));
         Serial.println(latitude, 6);
         Serial.print(F("GPS long:"));
@@ -161,25 +168,42 @@ void loop() {
         Serial.println(heading);
         Serial.print(F("GPS altitude:"));
         Serial.println(altitude);
+        Serial.print(F("Time:"));
+        Serial.print(year);
+        Serial.print(F("/"));
+        Serial.print(month);
+        Serial.print(F("/"));
+        Serial.print(day);
+        Serial.print(F("-"));
+        Serial.print(hr);
+        Serial.print(F(":"));
+        Serial.print(mins);
+        Serial.print(F(":"));
+        Serial.print(sec);
+        Serial.print(F("+"));
+        Serial.println(tz);
+        Serial.print(F("Epoch time:"));
+        Serial.println(now());
+        
 
         Serial.print(F("Publishing GPS payload"));
         uint8_t buffer[128];
-        BikeTrackerPayload payload = BikeTrackerPayload_init_zero;
-        pb_ostream_t stream = pb_ostream_from_buffer(buffer, sizeof(buffer));
-        payload.latitude = latitude;
-        payload.longitude = longitude;
-        // Todo:
-        payload.epoch = 0;
-        payload.battery = fona.getBattPercent();
-        payload.speed_kph = speed_kph;
-        pyload.heading = heading;
-        payload.altitude = altitude;
-        
-        payload_pub.publish("Todo");
+//        //BikeTrackerPayload payload = BikeTrackerPayload_init_zero;
+//        pb_ostream_t stream = pb_ostream_from_buffer(buffer, sizeof(buffer));
+//        payload.latitude = latitude;
+//        payload.longitude = longitude;
+//        // Todo: Get Epoch
+//        payload.epoch = 0;
+//        payload.battery = fona.getBattPercent();
+//        payload.speed_kph = speed_kph;
+//        pyload.heading = heading;
+//        payload.altitude = altitude;
+//        
+//        payload_pub.publish("Todo");
         
       } else {
-        sleep (300);
-        attempt += 1
+        delay(300);
+        attempt += 1;
       }
     } else {
       Serial.println("Failed to get GPS position 5 times in a row, skipping this GPS reading");
@@ -197,10 +221,11 @@ void loop() {
   while ((subscription = mqtt.readSubscription(5000))) {
     if (subscription == &sleep_sub) {
       Serial.print(F("Updating Sleep Duration to: "));
-      Serial.println(sleep_sub.lastread);
+      //Todo: How do I read from the sleep_sub.lastread, it has type uint8_t [20]
+      Serial.println(sleep_sub.lastread[0]);
     } else if (subscription == &reboot_sub) {
       Serial.print(F("Triggering device reboot..."));
-      FONA_power_off()
+      FONA_power_off();
       Watchdog.enable(100);
       delay(500);
     }

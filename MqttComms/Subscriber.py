@@ -28,7 +28,7 @@ def main():
     client.on_connect = on_connect
     client.on_message = on_message
     client.connect(host=config['MQTT_BROKER'], port=config['MQTT_PORT'])
-    client.subscribe(topic="test/#")
+    client.subscribe(topic="biketracker/#")
     client.loop_forever()
 
 
