@@ -10,27 +10,29 @@
   https://github.com/lectroidmarc/gsm-tracker/blob/master/gsm_tracker/gsm_tracker.ino
   Some sections of code were taken from the Adafruit MQTT Library examples: 
   https://github.com/adafruit/Adafruit_MQTT_Library/tree/master/examples/mqtt_fona
+  Some sections of code were taken from botletics MQTT example:
+  https://github.com/botletics/SIM7000-LTE-Shield/blob/master/Code/examples/SIM7000_MQTT_Demo/SIM7000_MQTT_Demo.ino
   I followed this Protocol Buffer guide:
   https://www.dfrobot.com/blog-1161.html
 
   Written specifically to work with the Adafruit FONA 3G + GPS Breakout
   ----> https://www.adafruit.com/product/2687
 
-  I modified the Adafruit FONA Library to add Network Time Sync support for the FONA 3G, which
-  was not previously supported. See https://github.com/adafruit/Adafruit_FONA/pull/115
+  I forked the fork of Adafruit's FONA library by 'botletics' and added Network Time Sync suport.
+  See https://github.com/OscarVanL/SIM7000-LTE-Shield
   I also merged this RTC helper function https://github.com/adafruit/Adafruit_FONA/pull/76
  ****************************************************/
 
 #include "Adafruit_SleepyDog.h"
-#include "Adafruit_FONA.h"
-#include "Adafruit_MQTT.h"
-#include "Adafruit_MQTT_FONA.h"
-#include "MQTT_Secrets.h"
-#include "proto_files/BikeTrackerPayload.pb.c"
-#include "pb_common.h"
+#include "Adafruit_FONA.h" // https://github.com/OscarVanL/SIM7000-LTE-Shield/tree/master/Code
+//#include "Adafruit_MQTT.h"
+//#include "Adafruit_MQTT_FONA.h"
+#include "MQTT_Secrets.h" // Define MQTT Broker configuration
+#include "proto_files/BikeTrackerPayload.pb.c" // Protocol buffer file
+#include "pb_common.h" // nanopb protocol buffer implementation https://github.com/nanopb/nanopb
 #include "pb.h"
 #include "pb_encode.h"
-#include <TimeLib.h>
+#include <TimeLib.h> // Used to get epoch time
 #include <SoftwareSerial.h>
 
 // FONA Pins
@@ -40,6 +42,11 @@
 #define FONA_PS 2
 #define FONA_KEY 3
 
+// Provider APN Settings
+#define FONA_APN      "TM" // Things Mobile APN
+
+#define MAX_FAILURES 5
+
 /****************************** FONA ***************************************/
 
 SoftwareSerial fonaSS = SoftwareSerial(FONA_TX, FONA_RX);
@@ -47,43 +54,44 @@ SoftwareSerial *fonaSerial = &fonaSS;
 
 // Setup FONA 3G
 Adafruit_FONA_3G fona = Adafruit_FONA_3G(FONA_RST);
+//Adafruit_FONA_LTE fona = Adafruit_FONA_LTE();
 
 /****************************** MQTT ***************************************/
 
-// Setup FONA MQTT class
-Adafruit_MQTT_FONA mqtt(&fona, MQTT_BROKER, MQTT_PORT, MQTT_USER, MQTT_PASS);
-// Publish to MQTT topic 'biketracker/payload' for sending location updates.
-Adafruit_MQTT_Publish payload_pub = Adafruit_MQTT_Publish(&mqtt, "biketracker/payload");
-// Subscribe to MQTT topic 'biketracker/sleep' for updating device sleep interval
-Adafruit_MQTT_Subscribe sleep_sub = Adafruit_MQTT_Subscribe(&mqtt, "biketracker/sleep");
-// Subscribe to MQTT topic 'biketracker/reboot' for triggering reboot of Arduino + FONA
-Adafruit_MQTT_Subscribe reboot_sub = Adafruit_MQTT_Subscribe(&mqtt, "biketracker/reboot");
+//// Setup FONA MQTT class
+//Adafruit_MQTT_FONA mqtt(&fona, MQTT_BROKER, MQTT_PORT, MQTT_USER, MQTT_PASS);
+//// Publish to MQTT topic 'biketracker/payload' for sending location updates.
+//Adafruit_MQTT_Publish payload_pub = Adafruit_MQTT_Publish(&mqtt, "biketracker/payload");
+//// Subscribe to MQTT topic 'biketracker/sleep' for updating device sleep interval
+//Adafruit_MQTT_Subscribe sleep_sub = Adafruit_MQTT_Subscribe(&mqtt, "biketracker/sleep");
+//// Subscribe to MQTT topic 'biketracker/reboot' for triggering reboot of Arduino + FONA
+//Adafruit_MQTT_Subscribe reboot_sub = Adafruit_MQTT_Subscribe(&mqtt, "biketracker/reboot");
 
 // How long to sleep device between payloads in milliseconds
-unsigned long sleep_duration = 60000;
+unsigned long sleep_duration = 30000;
 // How long the device can be unresponsive before the watchdog resets the Arduino.
 unsigned long watchdog_duration = 8000;
 
 
 void setup() {
+
   // Watchdog for if microcontroller crashes/freezes
   Watchdog.enable(watchdog_duration);
   
   /// FONA 3G Documentation: https://learn.adafruit.com/adafruit-fona-3g-cellular-gps-breakout/pinouts
   Serial.begin(9600);
-  Serial.println(F("Arduino started"));
   
   // Initialise Arduino pins
   pinMode(FONA_KEY, OUTPUT);
   digitalWrite(FONA_KEY, HIGH);
   pinMode(FONA_PS, INPUT);
 
-  // Power up FONA if it's off
+  // Reboot FONA
   FONA_power_on();
 
   Watchdog.reset();
   
-  Serial.println(F("Initialising FONA Serial..."));
+  Serial.println(F("Starting FONA Serial"));
   fonaSerial->begin(4800);
   if (! fona.begin(*fonaSerial)) {
     Serial.println(F("Couldn't find FONA"));
@@ -94,30 +102,28 @@ void setup() {
 
   // Check correct FONA connected
   uint8_t type = fona.type();
-  if (type == FONA3G_E) {
-    Serial.println(F("FONA 3G (European) in use"));
+  if (type == SIM5320E) {
+    Serial.println(F("SIM5320E FONA 3G in use"));
   } else {
-    Serial.println(F("Incorrect FONA in use"));
+    Serial.println(F("Incorrect FONA"));
   }
 
-  // Subscribe to relevant topics
-  mqtt.subscribe(&sleep_sub);
-  mqtt.subscribe(&reboot_sub);
-
   // Wait for GSM connection
-  Serial.print(F("Waiting for GSM network..."));
   while (1) {
     uint8_t network_status = fona.getNetworkStatus();
     if (network_status == 1 || network_status == 5) break;
     delay(1000);
   }
+  Watchdog.reset();
+
+  //fona_setup_network();
 
   Watchdog.reset();
 
   // Wait until the GPS module enables, if it never does something is wrong.
   while (1) {
     if (!fona.enableGPS(true)) {
-      Serial.println(F("Failed to turn on GPS"));
+      Serial.println(F("Failed to enable GPS"));
       delay(1000);
     } else {
       break;
@@ -125,22 +131,16 @@ void setup() {
   }
 }
 
-int failed_gps_retries = 5;
 bool gps_captured = false;
-int attempt = 0;
+int gpsfailures = 0;
 
 void loop() {
   Watchdog.reset();
   int8_t stat = fona.GPSstatus();
-  
-//  if (stat == 0) Serial.println(F("GPS Status: GPS off"));
-//  if (stat == 1) Serial.println(F("GPS Status: No fix"));
-//  if (stat == 2) Serial.println(F("GPS Status: 2D fix"));
-//  if (stat == 3) Serial.println(F("GPS Status: 3D fix"));
 
-  if (attempt < failed_gps_retries && gps_captured == false) {
-    Serial.print(F("Attempt no. "));
-    Serial.println(attempt);
+  if (gpsfailures < MAX_FAILURES && gps_captured == false) {
+    Serial.print(F("GPS attempt no."));
+    Serial.println(gpsfailures);
     
     if (stat >= 2) {
       // A 2D or 3D fix means we can report, otherwise don't report anything this time.
@@ -149,95 +149,214 @@ void loop() {
       boolean gps_success = fona.getGPS(&latitude, &longitude, &speed_kph, &heading, &altitude);
       if (gps_success) {
         gps_captured = true;
-        // FONA Library's readRTC function has been replaced with the unmerged one from https://github.com/adafruit/Adafruit_FONA/pull/76
-        uint8_t year, month, day, hr, mins, sec, tz;
-        fona.readRTC(&year, &month, &day, &hr, &mins, &sec, &tz);
-        // Convert time to epoch for more efficient transmission
-        setTime(hr, mins, sec, day, month, year);
-        
-        Serial.print(F("GPS lat:"));
-        Serial.println(latitude, 6);
-        Serial.print(F("GPS long:"));
-        Serial.println(longitude, 6);
-        Serial.print(F("GPS speed KPH:"));
-        Serial.println(speed_kph);
-        Serial.print(F("GPS heading:"));
-        Serial.println(heading);
-        Serial.print(F("GPS altitude:"));
-        Serial.println(altitude);
-        Serial.print(F("Time:"));
-        Serial.print(year);
-        Serial.print(F("/"));
-        Serial.print(month);
-        Serial.print(F("/"));
-        Serial.print(day);
-        Serial.print(F("-"));
-        Serial.print(hr);
-        Serial.print(F(":"));
-        Serial.print(mins);
-        Serial.print(F(":"));
-        Serial.print(sec);
-        Serial.print(F("+"));
-        Serial.println(tz);
-        Serial.print(F("Epoch time:"));
-        Serial.println(now());
         
         Watchdog.reset();
-        
-        Serial.print(F("Creating GPS payload"));
-        uint8_t buffer[128];
-        GpsPayload payload = GpsPayload_init_zero;
-        pb_ostream_t stream = pb_ostream_from_buffer(buffer, sizeof(buffer));
-        payload.gps_fix = true;
-        payload.latitude = latitude;
-        payload.longitude = longitude;
-        payload.epoch = now();
-        uint16_t batt_percent;
-        if (fona.getBattPercent(&batt_percent)) {
-          payload.battery = batt_percent;
-        }
-        payload.speed_kph = speed_kph;
-        payload.heading = heading;
-        payload.altitude = altitude;
-
-        // Serialise Protocol Buffer
-        bool status = pb_encode(&stream, GpsPayload_fields, &payload);
-        if (!status) {
-          Serial.println(F("ERROR: Failed to encode protocol buffer"));
-        } else {
-          Serial.print(F("Message Length: "));
-          Serial.println(stream.bytes_written);
-
-          Serial.print(F("Message: "));
-          for(int i = 0; i<stream.bytes_written; i++){
-            char tmp[16];
-            sprintf(tmp, "%02X", buffer[i]);
-            Serial.print(tmp);
-          }
-        }
-        
+        send_payload(true, latitude, longitude, speed_kph, heading, speed_mph, altitude);
         Watchdog.reset();
-        //payload_pub.publish("Todo");
-        
       }
     } else {
       Serial.println("No GPS");
       delay(700);
-      attempt += 1;
+      gpsfailures += 1;
     }
 
     Watchdog.reset();
   } else {
-    if (attempt >= failed_gps_retries) {
-      Serial.println(F("Failed to get GPS position 5 times in a row, skipping this GPS reading"));
+    if (gpsfailures >= MAX_FAILURES) {
+      Serial.println(F("Failed to get GPS postition"));
+      send_payload(false, 0, 0, 0, 0, 0, 0);
     } else {
+      // Payload was sent successfully
       Serial.println(F("Sleeping until next reading"));
     }
 
-    attempt = 0;
+    gpsfailures = 0;
     int sleepMs = sleep_device(sleep_duration);
   }
 
+}
+
+int txfailures = 0;
+
+/**
+ * @brief Creates and sends a payload.
+ * 
+ * @param gps_fix, latitude, longitude, speed_kph, heading, speed_mph, altitude GPS data
+ * @return bool Success code
+ */
+bool send_payload(bool gps_fix, float latitude, float longitude, float speed_kph, float heading, float speed_mph, float altitude) {
+  update_time();
+
+  Serial.print(F("GPS lat:"));
+  Serial.println(latitude, 6);
+  Serial.print(F("GPS long:"));
+  Serial.println(longitude, 6);
+  Serial.print(F("Speed KPH:"));
+  Serial.println(speed_kph);
+  Serial.print(F("Heading:"));
+  Serial.println(heading);
+  Serial.print(F("Altitude:"));
+  Serial.println(altitude);
+  
+  Serial.print(F("Creating GPS payload"));
+  Serial.flush();
+    
+  uint8_t buffer[32];
+  GpsPayload payload = GpsPayload_init_zero;
+  pb_ostream_t stream = pb_ostream_from_buffer(buffer, sizeof(buffer));
+  // Set GPS data
+  payload.gps_fix = gps_fix;
+  payload.latitude = latitude;
+  payload.longitude = longitude;
+  payload.speed_kph = speed_kph;
+  payload.heading = heading;
+  payload.altitude = altitude;
+  // Set metadata
+  payload.epoch = now();
+  uint16_t batt_percent;
+  if (fona.getBattPercent(&batt_percent)) {
+    payload.battery = batt_percent;
+  }
+  Serial.flush();
+  
+  Watchdog.reset();
+
+  // Serialise Protocol Buffer
+  bool status = pb_encode(&stream, GpsPayload_fields, &payload);
+  if (!status) {
+    Serial.println(F("ERROR: Failed to encode protobuf"));
+    return false;
+  } else {
+    Serial.print(F("Message Length: "));
+    Serial.println(stream.bytes_written);
+
+    Serial.print(F("Message: "));
+    for(int i = 0; i<stream.bytes_written; i++){
+      char tmp[16];
+      sprintf(tmp, "%02X", buffer[i]);
+      Serial.print(tmp);
+    }
+  }
+  Watchdog.reset();
+  Serial.flush();
+  
+
+  // Attempt to connect and publish the payload until MAX_FAILURES exceeded or payload publishes successfully.
+  fona_setup_network();
+  while (txfailures < MAX_FAILURES) {
+    MQTT_connect();
+    
+    char testBuff[20];
+    sprintf(testBuff, "Hello World");
+
+    //if (!fona.MQTTpublish(F("biketracker/payload"), buffer, stream.bytes_written, 1, 0)) Serial.println(F("Failed to publish"));
+    if (!fona.MQTTpublish("biketracker/payload", testBuff)) Serial.println(F("Failed to publish"));
+    
+  }
+  Watchdog.reset();
+}
+
+void fona_setup_network() {
+  
+  fonaSerial->println(F("AT+CMEE=2"));
+  // Set modem to full functionality
+  fona.setFunctionality(1); // AT+CFUN=1
+
+  //Set APN
+  fona.setNetworkSettings(F(FONA_APN));
+  if (!fona.enableGPRS(false)) Serial.println(F("Failed to disable GPRS"));
+  
+  if (!fona.enableGPRS(true)) Serial.println(F("Failed to enable GPRS"));
+  Serial.println(F("GPRS enabled"));
+  Watchdog.reset();
+
+  delay(2000);
+  fonaSerial->println("AT+IPADDR");
+
+  delay(1000);
+  Watchdog.reset();
+
+//  Serial.println("Opening TCP connection");
+//
+//  //Open TCP connection to MQTT broker
+//  while (!fona.TCPconnect(MQTT_BROKER, MQTT_PORT)) {
+//    Serial.println(F("Faild to connect to TCP/IP"));
+//  }
+//  Serial.println(F("TCP connection opened"));
+  
+//
+//  if (!fona.wirelessConnStatus()) {
+//    while (!fona.openWirelessConnection(true)) {
+//      Serial.println(F("Failed to turn on 3G, retrying..."));
+//      delay(1000);
+//    }
+//    Serial.println(F("Enabled data"));
+//  } else {
+//    Serial.println(F("Data already enabled"));
+//  }
+
+  
+}
+
+/**
+ * @brief Reads the time from FONA's RTC and updates the Arudino's Time Library
+ * This is used to get Epoch time for later transmission.
+ * Note: FONA Library's readRTC function has been replaced with the unmerged one from https://github.com/adafruit/Adafruit_FONA/pull/76
+ */
+void update_time() {
+  uint8_t year, month, day, hr, mins, sec, tz;
+  fona.readRTC(&year, &month, &day, &hr, &mins, &sec, &tz);
+  // Convert time to epoch for more efficient transmission
+  setTime(hr, mins, sec, day, month, year);
+  Serial.print(F("Epoch time:"));
+  Serial.println(now());
+}
+
+/**
+ * @brief Check the subscribed topics
+ * Note: Not yet implemented/working
+ *
+ * @return bool true on success, false if a connection cannot be made
+ */
+//bool check_subscriptions() {
+//  Adafruit_MQTT_Subscribe *subscription;
+//  while ((subscription = mqtt.readSubscription(5000))) {
+//    if (subscription == &sleep_sub) {
+//      Serial.print(F("Updating Sleep Duration to: "));
+//      //Todo: How do I read from the sleep_sub.lastread, it has type uint8_t [20]
+//      Serial.println(sleep_sub.lastread[0]);
+//    } else if (subscription == &reboot_sub) {
+//      Serial.print(F("Triggering device reboot..."));
+//      FONA_power_off();
+//      Watchdog.enable(100);
+//      delay(500);
+//    }
+//  }
+//  return true;
+//}
+
+/**
+ * @brief Connect / Reconnect as necessary to the MQTT server.
+ * Taken from mqtt_fona example from Adafruit MQTT library.
+ *
+ */
+void MQTT_connect() {
+  // If not connected, connect to MQTT
+  if (!fona.MQTTconnect("MQTT", MQTT_BROKER, MQTT_USER, MQTT_PASS)) Serial.println(F("Failed to connect to broker"));
+  fona.MQTTconnect("MQTT", MQTT_BROKER, MQTT_USER, MQTT_PASS);
+  
+//  if (!fona.MQTT_connectionStatus()) {
+//    fona.MQTT_setParameter("URL", MQTT_BROKER, MQTT_PORT);
+//    fona.MQTT_setParameter("USERNAME", MQTT_USER);
+//    fona.MQTT_setParameter("PASSWORD", MQTT_PASS);
+//    Serial.println(F("Connecting to MQTT broker..."));
+//    if (!fona.MQTT_connect(true)) {
+//      Serial.println(F("Failed to connect to broker"));
+//    }
+//  } else {
+//    Serial.println(F("Already connected to broker"));
+//  }
+  
 }
 
 /**
@@ -283,28 +402,6 @@ int sleep_device(unsigned long ms) {
   Serial.println(F("Arduino + FONA awake"));
   Serial.flush();
   return sleepMS;
-}
-
-/**
- * @brief Check the subscribed topics
- * Note: Not yet implemented/working
- *
- * @return bool true on success, false if a connection cannot be made
- */
-bool check_subscriptions() {
-  Adafruit_MQTT_Subscribe *subscription;
-  while ((subscription = mqtt.readSubscription(5000))) {
-    if (subscription == &sleep_sub) {
-      Serial.print(F("Updating Sleep Duration to: "));
-      //Todo: How do I read from the sleep_sub.lastread, it has type uint8_t [20]
-      Serial.println(sleep_sub.lastread[0]);
-    } else if (subscription == &reboot_sub) {
-      Serial.print(F("Triggering device reboot..."));
-      FONA_power_off();
-      Watchdog.enable(100);
-      delay(500);
-    }
-  }
 }
 
 // Function to switch FONA on
