@@ -1,0 +1,35 @@
+http://www.microchip.ua/simcom/WCDMA/APPNOTES/SIMCom_3G_MQTT_Application%20Note_V1.00.pdf
+https://cdn-shop.adafruit.com/datasheets/tcpip_application_note_for_wcdma_solution_v2.0_0.pdf
+
+Close existing connections
+AT+NETCLOSE
+Set full antenna functionality
+AT+CFUN=1
+Attach to Packet Domain Service
+AT+CGATT=1
+Set APN
+AT+CGSOCKCONT=1,"IP","TN"
+AT+CSOCKSETPN=1
+
+Enable 'transparent mode' (data mode)
+AT+CIPMODE=1
+AT+NETOPEN=,,1
+
+AT+IPADDR
+
+Close existing connections
+AT+CIPSHUT
+
+One connection at a time
+AT+CIPMUX=0
+
+anually read data
+AT+CIPRXGET=1
+
+AT+CIPOPEN=0,"TCP","mqtt-broker.dnsupdate.info",1883
+
+AT+CDNSGIP="mqtt-broker-pi.dnsupdate.info"
+
+
+
+Reason it's failing: TCPconnected is not valid for FONA 3G

@@ -86,8 +86,13 @@ void setup() {
   digitalWrite(FONA_KEY, HIGH);
   pinMode(FONA_PS, INPUT);
 
+  FONA_power_off();
+  delay(2000);
+  Watchdog.reset();
+
   // Reboot FONA
   FONA_power_on();
+  delay(2000);
 
   Watchdog.reset();
   
@@ -257,32 +262,39 @@ bool send_payload(bool gps_fix, float latitude, float longitude, float speed_kph
 }
 
 void fona_setup_network() {
+  // Disable existing GPRS connections
+  if (!fona.enableGPRS(false)) Serial.println(F("Failed to disable GPRS"));
   
   fonaSerial->println(F("AT+CMEE=2"));
   // Set modem to full functionality
   fona.setFunctionality(1); // AT+CFUN=1
 
   //Set APN
-  fona.setNetworkSettings(F(FONA_APN));
-  if (!fona.enableGPRS(false)) Serial.println(F("Failed to disable GPRS"));
+  fona.setNetworkSettings(F(FONA_APN)); // maybe calls AT+CGDCONT=1,"IP","TN"
   
   if (!fona.enableGPRS(true)) Serial.println(F("Failed to enable GPRS"));
   Serial.println(F("GPRS enabled"));
   Watchdog.reset();
+  // Print the IP address
+  fona.printIP();
 
-  delay(2000);
-  fonaSerial->println("AT+IPADDR");
+  Serial.println("DNS Lookup");
+  char MQTT_IP[17]; //"RRR.XXX.YYY.ZZZ", maximum 17 characters
+  fona.DNSlookup(F(MQTT_BROKER), IP);
+  Serial.print("DNS Lookup result: ");
+  Serial.println(IP);
 
-  delay(1000);
+  delay(4000);
   Watchdog.reset();
 
-//  Serial.println("Opening TCP connection");
-//
-//  //Open TCP connection to MQTT broker
-//  while (!fona.TCPconnect(MQTT_BROKER, MQTT_PORT)) {
-//    Serial.println(F("Faild to connect to TCP/IP"));
-//  }
-//  Serial.println(F("TCP connection opened"));
+  Serial.println("Opening TCP connection");
+
+  //Open TCP connection to MQTT broker
+  while (!fona.TCPconnect(MQTT_IP, MQTT_PORT)) { 
+    Serial.println(F("Faild to connect to TCP/IP"));
+    delay(5000);
+  }
+  Serial.println(F("TCP connection opened"));
   
 //
 //  if (!fona.wirelessConnStatus()) {
