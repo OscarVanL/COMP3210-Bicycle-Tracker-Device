@@ -44,7 +44,6 @@
 
 // Provider APN Settings
 #define FONA_APN      "TM" // Things Mobile APN
-
 #define MAX_FAILURES 5
 
 /****************************** FONA ***************************************/
@@ -54,54 +53,37 @@ SoftwareSerial *fonaSerial = &fonaSS;
 
 // Setup FONA 3G
 Adafruit_FONA_3G fona = Adafruit_FONA_3G(FONA_RST);
-//Adafruit_FONA_LTE fona = Adafruit_FONA_LTE();
-
-/****************************** MQTT ***************************************/
-
-//// Setup FONA MQTT class
-//Adafruit_MQTT_FONA mqtt(&fona, MQTT_BROKER, MQTT_PORT, MQTT_USER, MQTT_PASS);
-//// Publish to MQTT topic 'biketracker/payload' for sending location updates.
-//Adafruit_MQTT_Publish payload_pub = Adafruit_MQTT_Publish(&mqtt, "biketracker/payload");
-//// Subscribe to MQTT topic 'biketracker/sleep' for updating device sleep interval
-//Adafruit_MQTT_Subscribe sleep_sub = Adafruit_MQTT_Subscribe(&mqtt, "biketracker/sleep");
-//// Subscribe to MQTT topic 'biketracker/reboot' for triggering reboot of Arduino + FONA
-//Adafruit_MQTT_Subscribe reboot_sub = Adafruit_MQTT_Subscribe(&mqtt, "biketracker/reboot");
 
 // How long to sleep device between payloads in milliseconds
 unsigned long sleep_duration = 30000;
-// How long the device can be unresponsive before the watchdog resets the Arduino.
-unsigned long watchdog_duration = 8000;
 
+// Use IMEI for the MQTT device ID
+char imei[16] = {0};
 
 void setup() {
-
-  // Watchdog for if microcontroller crashes/freezes
-  Watchdog.enable(watchdog_duration);
-  
-  /// FONA 3G Documentation: https://learn.adafruit.com/adafruit-fona-3g-cellular-gps-breakout/pinouts
-  Serial.begin(9600);
-  
   // Initialise Arduino pins
   pinMode(FONA_KEY, OUTPUT);
   digitalWrite(FONA_KEY, HIGH);
   pinMode(FONA_PS, INPUT);
+  
+  // How long the device can be unresponsive before the watchdog resets the Arduino.
+  Watchdog.enable(8000);
+  
+  /// FONA 3G Documentation: https://learn.adafruit.com/adafruit-fona-3g-cellular-gps-breakout/pinouts
+  Serial.begin(9600);
 
   FONA_power_off();
-  delay(2000);
+  delay(3000);
   Watchdog.reset();
 
   // Reboot FONA
   FONA_power_on();
-  delay(2000);
+  delay(1000);
 
   Watchdog.reset();
+
+  FONA_setup();
   
-  Serial.println(F("Starting FONA Serial"));
-  fonaSerial->begin(4800);
-  if (! fona.begin(*fonaSerial)) {
-    Serial.println(F("Couldn't find FONA"));
-    while (1);
-  }
 
   Watchdog.reset();
 
@@ -113,39 +95,24 @@ void setup() {
     Serial.println(F("Incorrect FONA"));
   }
 
-  // Wait for GSM connection
-  while (1) {
-    uint8_t network_status = fona.getNetworkStatus();
-    if (network_status == 1 || network_status == 5) break;
-    delay(1000);
+  // Get the module IMEI
+  uint8_t imeiLen = fona.getIMEI(imei);
+  if (imeiLen > 0) {
+    Serial.print(F("Module IMEI: ")); Serial.println(imei);
+  } else { 
+    Serial.println(F("Error getting IMEI"));
   }
   Watchdog.reset();
-
-  //fona_setup_network();
-
-  Watchdog.reset();
-
-  // Wait until the GPS module enables, if it never does something is wrong.
-  while (1) {
-    if (!fona.enableGPS(true)) {
-      Serial.println(F("Failed to enable GPS"));
-      delay(1000);
-    } else {
-      break;
-    }
-  }
 }
 
 bool gps_captured = false;
-int gpsfailures = 0;
+uint8_t gpsfailures = 0;
 
 void loop() {
-  Watchdog.reset();
   int8_t stat = fona.GPSstatus();
 
   if (gpsfailures < MAX_FAILURES && gps_captured == false) {
-    Serial.print(F("GPS attempt no."));
-    Serial.println(gpsfailures);
+    Serial.print(F("GPS attempt no.")); Serial.println(gpsfailures);
     
     if (stat >= 2) {
       // A 2D or 3D fix means we can report, otherwise don't report anything this time.
@@ -160,7 +127,7 @@ void loop() {
         Watchdog.reset();
       }
     } else {
-      Serial.println("No GPS");
+      Serial.println(F("No GPS"));
       delay(700);
       gpsfailures += 1;
     }
@@ -175,10 +142,12 @@ void loop() {
       Serial.println(F("Sleeping until next reading"));
     }
 
+    gps_captured = false;
     gpsfailures = 0;
     int sleepMs = sleep_device(sleep_duration);
   }
-
+  
+  Watchdog.reset();
 }
 
 int txfailures = 0;
@@ -205,8 +174,9 @@ bool send_payload(bool gps_fix, float latitude, float longitude, float speed_kph
   
   Serial.print(F("Creating GPS payload"));
   Serial.flush();
-    
-  uint8_t buffer[32];
+
+  // Buffer for storing the encoded protocol buffer message
+  uint8_t buffer[128];
   GpsPayload payload = GpsPayload_init_zero;
   pb_ostream_t stream = pb_ostream_from_buffer(buffer, sizeof(buffer));
   // Set GPS data
@@ -228,15 +198,16 @@ bool send_payload(bool gps_fix, float latitude, float longitude, float speed_kph
 
   // Serialise Protocol Buffer
   bool status = pb_encode(&stream, GpsPayload_fields, &payload);
+  uint8_t pb_length = stream.bytes_written;
   if (!status) {
     Serial.println(F("ERROR: Failed to encode protobuf"));
     return false;
   } else {
     Serial.print(F("Message Length: "));
-    Serial.println(stream.bytes_written);
+    Serial.println(pb_length);
 
     Serial.print(F("Message: "));
-    for(int i = 0; i<stream.bytes_written; i++){
+    for(int i = 0; i<pb_length; i++){
       char tmp[16];
       sprintf(tmp, "%02X", buffer[i]);
       Serial.print(tmp);
@@ -245,25 +216,29 @@ bool send_payload(bool gps_fix, float latitude, float longitude, float speed_kph
   Watchdog.reset();
   Serial.flush();
   
+  
+  fona_setup_network();
 
   // Attempt to connect and publish the payload until MAX_FAILURES exceeded or payload publishes successfully.
-  fona_setup_network();
   while (txfailures < MAX_FAILURES) {
-    MQTT_connect();
-    
-    char testBuff[20];
-    sprintf(testBuff, "Hello World");
-
-    //if (!fona.MQTTpublish(F("biketracker/payload"), buffer, stream.bytes_written, 1, 0)) Serial.println(F("Failed to publish"));
-    if (!fona.MQTTpublish("biketracker/payload", testBuff)) Serial.println(F("Failed to publish"));
-    
+    if (MQTT_connect()) {
+      delay(500);
+  
+      Serial.println(F("Publishing!"));
+      if (!fona.MQTTpublish("biketracker/payload", buffer, pb_length)) {
+        Serial.println(F("Failed to publish"));
+      } else {
+        Serial.println(F("Publishing successful!"));
+        break;
+      }
+    }
   }
   Watchdog.reset();
 }
 
 void fona_setup_network() {
   // Disable existing GPRS connections
-  if (!fona.enableGPRS(false)) Serial.println(F("Failed to disable GPRS"));
+  fona.enableGPRS(false);
   
   fonaSerial->println(F("AT+CMEE=2"));
   // Set modem to full functionality
@@ -274,40 +249,32 @@ void fona_setup_network() {
   
   if (!fona.enableGPRS(true)) Serial.println(F("Failed to enable GPRS"));
   Serial.println(F("GPRS enabled"));
-  Watchdog.reset();
   // Print the IP address
   fona.printIP();
 
-  Serial.println("DNS Lookup");
-  char MQTT_IP[17]; //"RRR.XXX.YYY.ZZZ", maximum 17 characters
-  fona.DNSlookup(F(MQTT_BROKER), IP);
-  Serial.print("DNS Lookup result: ");
-  Serial.println(IP);
+  Watchdog.reset();
+  Serial.println(F("DNS Lookup"));
+  Serial.flush();
 
-  delay(4000);
+  char MQTT_IP[17]; // Holds the DNS resolved IP address from the Domain "RRR.XXX.YYY.ZZZ", maximum 17 characters
+  fona.DNSlookup(F(MQTT_BROKER), MQTT_IP);
+  Watchdog.reset();
+  Serial.print(F("DNS Lookup result: "));
+  Serial.println(MQTT_IP);
+  Serial.flush();
+
+  delay(3000);
   Watchdog.reset();
 
-  Serial.println("Opening TCP connection");
+  Serial.println(F("Opening TCP connection"));
 
   //Open TCP connection to MQTT broker
   while (!fona.TCPconnect(MQTT_IP, MQTT_PORT)) { 
     Serial.println(F("Faild to connect to TCP/IP"));
-    delay(5000);
+    delay(2000);
   }
   Serial.println(F("TCP connection opened"));
-  
-//
-//  if (!fona.wirelessConnStatus()) {
-//    while (!fona.openWirelessConnection(true)) {
-//      Serial.println(F("Failed to turn on 3G, retrying..."));
-//      delay(1000);
-//    }
-//    Serial.println(F("Enabled data"));
-//  } else {
-//    Serial.println(F("Data already enabled"));
-//  }
 
-  
 }
 
 /**
@@ -320,7 +287,7 @@ void update_time() {
   fona.readRTC(&year, &month, &day, &hr, &mins, &sec, &tz);
   // Convert time to epoch for more efficient transmission
   setTime(hr, mins, sec, day, month, year);
-  Serial.print(F("Epoch time:"));
+  Serial.print(F("Epoch:"));
   Serial.println(now());
 }
 
@@ -352,23 +319,13 @@ void update_time() {
  * Taken from mqtt_fona example from Adafruit MQTT library.
  *
  */
-void MQTT_connect() {
+bool MQTT_connect() {
   // If not connected, connect to MQTT
-  if (!fona.MQTTconnect("MQTT", MQTT_BROKER, MQTT_USER, MQTT_PASS)) Serial.println(F("Failed to connect to broker"));
-  fona.MQTTconnect("MQTT", MQTT_BROKER, MQTT_USER, MQTT_PASS);
-  
-//  if (!fona.MQTT_connectionStatus()) {
-//    fona.MQTT_setParameter("URL", MQTT_BROKER, MQTT_PORT);
-//    fona.MQTT_setParameter("USERNAME", MQTT_USER);
-//    fona.MQTT_setParameter("PASSWORD", MQTT_PASS);
-//    Serial.println(F("Connecting to MQTT broker..."));
-//    if (!fona.MQTT_connect(true)) {
-//      Serial.println(F("Failed to connect to broker"));
-//    }
-//  } else {
-//    Serial.println(F("Already connected to broker"));
-//  }
-  
+  if (!fona.MQTTconnect("MQIsdp", imei, MQTT_USER, MQTT_PASS)) {
+    Serial.println(F("Failed to connect to broker"));
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -393,7 +350,7 @@ int sleep_device(unsigned long ms) {
   // 4000ms is the most Watchdog can sleep in one go
   unsigned long sleepMS = 0;
   if (ms > 4000) {
-    int sleep_num = ms / 4000;
+    uint8_t sleep_num = ms / 4000;
     Watchdog.reset();
     for(int i=0;i<sleep_num;i++) {
       Watchdog.reset();
@@ -407,13 +364,44 @@ int sleep_device(unsigned long ms) {
   
   Watchdog.reset();
   FONA_power_on();
-
+  
   Serial.print(F("Device slept for: "));
   Serial.println(sleepMS);
-  Serial.flush();
   Serial.println(F("Arduino + FONA awake"));
-  Serial.flush();
+  delay(2000);
+  FONA_setup();
   return sleepMS;
+}
+
+/*
+ * After FONA has been powered on. Open fonaSerial, enable GSM, enable GPS
+ */
+void FONA_setup() {
+  Serial.println(F("Starting FONA Serial"));
+  fonaSerial->begin(4800);
+  if (! fona.begin(*fonaSerial)) {
+    Serial.println(F("Couldn't find FONA"));
+    while (1);
+  }
+
+  // Wait for GSM connection
+  while (1) {
+    uint8_t network_status = fona.getNetworkStatus();
+    if (network_status == 1 || network_status == 5) break;
+    delay(1000);
+  }
+  Watchdog.reset();
+
+  // Wait until the GPS module enables, if it never does something is wrong.
+  while (1) {
+    if (!fona.enableGPS(true)) {
+      Serial.println(F("Failed to enable GPS"));
+      delay(1000);
+    } else {
+      break;
+    }
+  }
+  Watchdog.reset();
 }
 
 // Function to switch FONA on
@@ -425,6 +413,7 @@ void FONA_power_on() {
       digitalWrite(FONA_KEY, LOW);
       delay(500);
     }
+    Watchdog.reset();
     digitalWrite(FONA_KEY, HIGH);
     Serial.println(F("FONA Started"));
   } else {
@@ -438,7 +427,8 @@ void FONA_power_off() {
   if (digitalRead(FONA_PS) == HIGH) {
     Serial.println(F("Powering FONA off"));
     digitalWrite(FONA_KEY, LOW);
-    delay(1000);
+    delay(1500);
+    Watchdog.reset();
     digitalWrite(FONA_KEY, HIGH);
     Serial.println(F("FONA Powered Off"));
   } else {

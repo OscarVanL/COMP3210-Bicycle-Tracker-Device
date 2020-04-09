@@ -4,6 +4,7 @@
 #define FONA_RST 7
 
 // Large buffer for replies
+char readbuffer[255];
 char replybuffer[255];
 
 #include <SoftwareSerial.h>
@@ -26,7 +27,9 @@ void loop() {
   while (1) {
     while (Serial.available()) {
       delay(1);
-      fonaSerial->write(Serial.read());
+      
+      readbuffer[0] = Serial.read();
+      fonaSerial->write(readbuffer);
     }
     if (fonaSerial->available()) {
       Serial.write(fonaSerial->read());
