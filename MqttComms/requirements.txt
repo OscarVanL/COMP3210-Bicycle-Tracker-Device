@@ -1,0 +1,5 @@
+protobuf
+pyyaml
+paho-mqtt
+uuid
+csv

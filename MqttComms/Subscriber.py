@@ -3,7 +3,7 @@ import sys
 import yaml
 import uuid
 import time
-from MqttComms.proto_files import BikeTrackerPayload_pb2  # Our compiled Schema for Python
+from proto_files import BikeTrackerPayload_pb2  # Our compiled Schema for Python
 import csv
 import os
 
