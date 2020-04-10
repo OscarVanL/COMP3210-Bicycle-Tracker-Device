@@ -55,7 +55,7 @@ SoftwareSerial *fonaSerial = &fonaSS;
 Adafruit_FONA_3G fona = Adafruit_FONA_3G(FONA_RST);
 
 // How long to sleep device between payloads in milliseconds
-unsigned long sleep_duration = 30000;
+unsigned long sleep_duration = 300000;
 
 // Use IMEI for the MQTT device ID
 char imei[16] = {0};
@@ -182,10 +182,15 @@ bool send_payload(bool gps_fix, float latitude, float longitude, float speed_kph
   // Set GPS data
   payload.gps_fix = gps_fix;
   payload.latitude = latitude;
+  payload.has_latitude = gps_fix;
   payload.longitude = longitude;
+  payload.has_longitude = gps_fix;
   payload.speed_kph = speed_kph;
+  payload.has_speed_kph = gps_fix;
   payload.heading = heading;
+  payload.has_heading = gps_fix;
   payload.altitude = altitude;
+  payload.has_altitude = gps_fix;
   // Set metadata
   payload.epoch = now();
   uint16_t batt_percent;
@@ -347,12 +352,15 @@ int sleep_device(unsigned long ms) {
   Serial.println(F("Sleeping Arduino"));
   Serial.flush();
 
+
   // 4000ms is the most Watchdog can sleep in one go
   unsigned long sleepMS = 0;
   if (ms > 4000) {
     uint8_t sleep_num = ms / 4000;
+    Serial.print(F("Sleeping for ")); Serial.print(sleep_num); Serial.println(F("x4000 ms"));
+    Serial.flush();
     Watchdog.reset();
-    for(int i=0;i<sleep_num;i++) {
+    for(uint8_t i=0;i<sleep_num;i++) {
       Watchdog.reset();
       sleepMS += Watchdog.sleep(4000);
     }

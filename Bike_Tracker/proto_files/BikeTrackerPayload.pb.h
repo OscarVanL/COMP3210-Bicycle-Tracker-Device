@@ -16,19 +16,24 @@ extern "C" {
 /* Struct definitions */
 typedef struct _GpsPayload {
     bool gps_fix;
+    bool has_latitude;
     float latitude;
+    bool has_longitude;
     float longitude;
     int64_t epoch;
     int32_t battery;
+    bool has_speed_kph;
     float speed_kph;
+    bool has_heading;
     float heading;
+    bool has_altitude;
     float altitude;
 } GpsPayload;
 
 
 /* Initializer values for message structs */
-#define GpsPayload_init_default                  {0, 0, 0, 0, 0, 0, 0, 0}
-#define GpsPayload_init_zero                     {0, 0, 0, 0, 0, 0, 0, 0}
+#define GpsPayload_init_default                  {0, false, 0, false, 0, 0, 0, false, 0, false, 0, false, 0}
+#define GpsPayload_init_zero                     {0, false, 0, false, 0, 0, 0, false, 0, false, 0, false, 0}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define GpsPayload_gps_fix_tag                   1
@@ -43,13 +48,13 @@ typedef struct _GpsPayload {
 /* Struct field encoding specification for nanopb */
 #define GpsPayload_FIELDLIST(X, a) \
 X(a, STATIC,   REQUIRED, BOOL,     gps_fix,           1) \
-X(a, STATIC,   REQUIRED, FLOAT,    latitude,          2) \
-X(a, STATIC,   REQUIRED, FLOAT,    longitude,         3) \
+X(a, STATIC,   OPTIONAL, FLOAT,    latitude,          2) \
+X(a, STATIC,   OPTIONAL, FLOAT,    longitude,         3) \
 X(a, STATIC,   REQUIRED, INT64,    epoch,             4) \
 X(a, STATIC,   REQUIRED, INT32,    battery,           5) \
-X(a, STATIC,   REQUIRED, FLOAT,    speed_kph,         6) \
-X(a, STATIC,   REQUIRED, FLOAT,    heading,           7) \
-X(a, STATIC,   REQUIRED, FLOAT,    altitude,          8)
+X(a, STATIC,   OPTIONAL, FLOAT,    speed_kph,         6) \
+X(a, STATIC,   OPTIONAL, FLOAT,    heading,           7) \
+X(a, STATIC,   OPTIONAL, FLOAT,    altitude,          8)
 #define GpsPayload_CALLBACK NULL
 #define GpsPayload_DEFAULT NULL
 

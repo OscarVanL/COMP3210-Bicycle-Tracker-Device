@@ -4,9 +4,9 @@ message GpsPayload {
 	required bool gps_fix = 1;
 	required int64 epoch = 4;
 	required int32 battery = 5;
-	required float latitude = 2;
-	required float longitude = 3;
-	required float speed_kph = 6;
-	required float heading = 7;
-	required float altitude = 8;
+	optional float latitude = 2;
+	optional float longitude = 3;
+	optional float speed_kph = 6;
+	optional float heading = 7;
+	optional float altitude = 8;
 }

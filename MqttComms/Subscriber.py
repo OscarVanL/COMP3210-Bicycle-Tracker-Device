@@ -2,7 +2,12 @@ import paho.mqtt.client
 import sys
 import yaml
 import uuid
+import time
 from MqttComms.proto_files import BikeTrackerPayload_pb2  # Our compiled Schema for Python
+import csv
+import os
+
+output_file = os.path.join(os.getcwd(), 'location.csv')
 
 
 def on_connect(client, userdata, flags, rc):
@@ -24,12 +29,40 @@ def on_message(client, userdata, message):
 
     print('GPS Fix:', tracker_payload.gps_fix)
     print('Epoch:', tracker_payload.epoch)
+    print('Time:', time.ctime(tracker_payload.epoch))
     print('Battery:', tracker_payload.battery, '%')
     print('Latitude:', tracker_payload.latitude)
     print('Longitude:', tracker_payload.longitude)
     print('Speed km/h:', tracker_payload.speed_kph)
     print('Heading:', tracker_payload.heading)
     print('Altitude:', tracker_payload.altitude)
+
+    if os.path.isfile(output_file):
+        # CSV exists, append to end of file
+        with open(output_file, 'a', encoding="utf-8", newline='') as locationfile:
+            writer = csv.writer(locationfile)
+            writer.writerow([tracker_payload.epoch,
+                            tracker_payload.gps_fix,
+                            tracker_payload.battery,
+                            tracker_payload.latitude,
+                            tracker_payload.longitude,
+                            tracker_payload.speed_kph,
+                            tracker_payload.heading,
+                            tracker_payload.altitude])
+
+    else:
+        # CSV does not exist. Write the headings
+        with open(output_file, 'w', encoding="utf-8", newline='') as locationfile:
+            writer = csv.writer(locationfile)
+            writer.writerow(['epoch', 'gps_fix', 'battery', 'latitude', 'longitude', 'speed_kph', 'heading', 'altitude'])
+            writer.writerow([tracker_payload.epoch,
+                            tracker_payload.gps_fix,
+                            tracker_payload.battery,
+                            tracker_payload.latitude,
+                            tracker_payload.longitude,
+                            tracker_payload.speed_kph,
+                            tracker_payload.heading,
+                            tracker_payload.altitude])
 
 
 def main():
