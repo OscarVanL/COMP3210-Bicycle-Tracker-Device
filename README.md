@@ -1,4 +1,4 @@
-# COMP3210-Bike-Tracker
+# COMP3210-Bicycle-Tracker-Device
 
 This project was for a small coursework task in COMP3210, Advanced Computer Networks. 
 
